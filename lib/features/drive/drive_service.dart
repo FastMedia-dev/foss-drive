@@ -3,11 +3,11 @@ import 'dart:convert';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:myapp/features/drive/file_model.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 class DriveService {
   static const _storage = FlutterSecureStorage();
   static const _driveItemsKey = 'driveItems';
-  static const _offlineStoragePath = '/foss-drive'; // Relative path
 
   // Dummy initial data
   final List<DriveItem> _initialDriveItems = [
@@ -17,18 +17,40 @@ class DriveService {
     DriveItem(id: 'file2', name: 'Vacation.jpg', type: FileType.image, parentId: 'f2', createdAt: DateTime.now(), size: 1024 * 1024 * 2, downloadUrl: 'http://example.com/vacation.jpg'),
   ];
 
+  /// Get all items or items for a specific folder
   Future<List<DriveItem>> getDriveItems({String? parentId}) async {
     final String? itemsJson = await _storage.read(key: _driveItemsKey);
     List<DriveItem> allItems;
     if (itemsJson != null) {
-      final List<dynamic> jsonList = json.decode(itemsJson);
-      allItems = jsonList.map((json) => DriveItem.fromJson(json)).toList();
+      try {
+        final List<dynamic> jsonList = json.decode(itemsJson);
+        allItems = jsonList.map((json) => DriveItem.fromJson(json)).toList();
+      } catch (e) {
+         print("Error decoding drive items: $e");
+         allItems = _initialDriveItems;
+      }
     } else {
       // If no items are stored, save initial dummy items for initial use
       await _saveDriveItems(_initialDriveItems);
       allItems = _initialDriveItems;
     }
+
+    // Return items that match the parentId
     return allItems.where((item) => item.parentId == parentId).toList();
+  }
+
+  // Helper to get ALL items (internal)
+  Future<List<DriveItem>> _getAllItems() async {
+    final String? itemsJson = await _storage.read(key: _driveItemsKey);
+    if (itemsJson != null) {
+      try {
+        final List<dynamic> jsonList = json.decode(itemsJson);
+        return jsonList.map((json) => DriveItem.fromJson(json)).toList();
+      } catch (e) {
+        return _initialDriveItems;
+      }
+    }
+    return _initialDriveItems;
   }
 
   Future<void> _saveDriveItems(List<DriveItem> items) async {
@@ -37,7 +59,7 @@ class DriveService {
   }
 
   Future<void> uploadFile(String fileName, List<int> fileBytes, {String? parentId}) async {
-    List<DriveItem> allItems = await getDriveItems(); // Get all items, not just top-level
+    List<DriveItem> allItems = await _getAllItems();
     final newFile = DriveItem(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       name: fileName,
@@ -51,44 +73,78 @@ class DriveService {
     await _saveDriveItems(allItems);
   }
 
+  /// Gets the download path: /storage/emulated/0/foss-drive/
   Future<String> _getDownloadPath() async {
-    // This will get the external storage directory on Android or Documents directory on iOS
-    final Directory? externalStorageDir = await getExternalStorageDirectory();
-    if (externalStorageDir == null) {
-      throw Exception('Could not get external storage directory.');
+    // Check permissions first
+    if (Platform.isAndroid) {
+      if (await Permission.manageExternalStorage.request().isGranted) {
+        // Android 11+ All files access
+      } else if (await Permission.storage.request().isGranted) {
+         // Legacy storage
+      } else {
+        // Try anyway, or handle denied
+        print("Storage permission might be denied.");
+      }
     }
-    final String downloadPath = '${externalStorageDir.path}/foss-drive';
-    final Directory appDir = Directory(downloadPath);
-    if (!await appDir.exists()) {
-      await appDir.create(recursive: true);
+
+    // Target path: /storage/emulated/0/foss-drive/
+    // We can try to construct this manually or use getExternalStorageDirectory()
+    // getExternalStorageDirectory() usually gives /storage/emulated/0/Android/data/com.package/files/
+    // To get the root /storage/emulated/0/foss-drive, we need to be careful.
+
+    // Attempting to write to /storage/emulated/0/foss-drive requires MANAGE_EXTERNAL_STORAGE on Android 11+
+    // OR using the MediaStore API (which is harder in raw Dart).
+    // For this prototype, we will try to use the public Documents folder or similar if possible,
+    // or the specific path requested if permission is granted.
+
+    Directory? directory;
+    if (Platform.isAndroid) {
+      directory = Directory('/storage/emulated/0/foss-drive');
+    } else {
+      directory = await getApplicationDocumentsDirectory();
     }
-    return downloadPath;
+
+    if (!await directory.exists()) {
+      await directory.create(recursive: true);
+    }
+
+    return directory.path;
+  }
+
+  /// Gets the secure offline storage path (internal app data)
+  Future<String> _getOfflineStoragePath() async {
+    final directory = await getApplicationDocumentsDirectory();
+    final offlineDir = Directory('${directory.path}/offline_files');
+    if (!await offlineDir.exists()) {
+      await offlineDir.create(recursive: true);
+    }
+    return offlineDir.path;
   }
 
   Future<void> downloadFile(DriveItem file) async {
     if (file.downloadUrl == null) {
-      throw Exception('File does not have a download URL.');
+      // If it's a file uploaded via our "Upload" dummy, it has no real URL.
+      // In a real app, we'd have a backend.
+      // Here, we will just create a dummy file at the destination.
     }
-    // Simulate file download
-    print('Downloading ${file.name} from ${file.downloadUrl}');
-    // In a real app, you would use http or dio to download the file
-    // For now, we\'ll just simulate writing a dummy file.
-    final String downloadPath = await _getDownloadPath();
-    final File localFile = File('$downloadPath/${file.name}');
-    await localFile.writeAsString('Dummy content for ${file.name}');
-    print('File saved to: ${localFile.path}');
 
-    // Update offline status
-    List<DriveItem> allItems = await getDriveItems();
-    int index = allItems.indexWhere((item) => item.id == file.id);
-    if (index != -1) {
-      allItems[index] = allItems[index].copyWith(isOfflineAvailable: true);
-      await _saveDriveItems(allItems);
+    print('Downloading ${file.name}...');
+
+    try {
+        final String downloadPath = await _getDownloadPath();
+        final File localFile = File('$downloadPath/${file.name}');
+
+        // Write dummy content
+        await localFile.writeAsString('This is the content of ${file.name}.\nDownloaded from Foss Drive.');
+        print('File saved to: ${localFile.path}');
+    } catch (e) {
+        print("Error saving to external storage: $e");
+        // Fallback or notify user
     }
   }
 
   Future<void> createFolder(String folderName, {String? parentId}) async {
-    List<DriveItem> allItems = await getDriveItems();
+    List<DriveItem> allItems = await _getAllItems();
     final newFolder = DriveItem(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       name: folderName,
@@ -101,16 +157,36 @@ class DriveService {
   }
 
   Future<List<DriveItem>> getOfflineFiles() async {
-    List<DriveItem> allItems = await getDriveItems();
+    List<DriveItem> allItems = await _getAllItems();
     return allItems.where((item) => item.isOfflineAvailable).toList();
   }
 
   Future<void> toggleOfflineAvailability(DriveItem item) async {
-    List<DriveItem> allItems = await getDriveItems();
+    List<DriveItem> allItems = await _getAllItems();
     int index = allItems.indexWhere((i) => i.id == item.id);
+
     if (index != -1) {
-      allItems[index] = allItems[index].copyWith(isOfflineAvailable: !item.isOfflineAvailable);
+      bool newStatus = !item.isOfflineAvailable;
+      allItems[index] = allItems[index].copyWith(isOfflineAvailable: newStatus);
       await _saveDriveItems(allItems);
+
+      // Handle actual file caching
+      try {
+        final offlinePath = await _getOfflineStoragePath();
+        final File offlineFile = File('$offlinePath/${item.id}_${item.name}');
+
+        if (newStatus) {
+            // Save to offline storage
+             await offlineFile.writeAsString('Offline content for ${item.name}');
+        } else {
+            // Remove from offline storage
+            if (await offlineFile.exists()) {
+                await offlineFile.delete();
+            }
+        }
+      } catch (e) {
+          print("Error handling offline file storage: $e");
+      }
     }
   }
 }

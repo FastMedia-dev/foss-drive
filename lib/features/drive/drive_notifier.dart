@@ -8,7 +8,13 @@ class DriveNotifier with ChangeNotifier {
   List<DriveItem> get currentFolderItems => _currentFolderItems;
 
   String? _currentParentId; // Null for root folder
+  String? get currentParentId => _currentParentId;
+
+  String? _currentFolderName;
+  String? get currentFolderName => _currentFolderName;
+
   List<String> _pathHistory = []; // To navigate back
+  List<String> _nameHistory = [];
 
   DriveNotifier() {
     _loadDriveItems();
@@ -22,11 +28,11 @@ class DriveNotifier with ChangeNotifier {
 
   Future<void> openFolder(DriveItem folder) async {
     if (folder.type == FileType.folder) {
-      _pathHistory.add(_currentParentId ?? 
-        // If currentParentId is null, it means we are at the root, so add an empty string to history
-        // so we can go back to root from sub-folder
-        
-        '');
+      _pathHistory.add(_currentParentId ?? '');
+      _nameHistory.add(_currentFolderName ?? 'Home');
+
+      _currentFolderName = folder.name;
+
       await _loadDriveItems(parentId: folder.id);
     }
   }
@@ -35,6 +41,14 @@ class DriveNotifier with ChangeNotifier {
     if (_pathHistory.isNotEmpty) {
       String? previousParentId = _pathHistory.removeLast();
       if (previousParentId == '') previousParentId = null; // Back to root
+
+      if (_nameHistory.isNotEmpty) {
+        String prevName = _nameHistory.removeLast();
+        _currentFolderName = prevName == 'Home' ? null : prevName;
+      } else {
+        _currentFolderName = null;
+      }
+
       await _loadDriveItems(parentId: previousParentId);
     }
   }
