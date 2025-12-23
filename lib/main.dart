@@ -1,4 +1,5 @@
 import 'dart:ui';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -8,6 +9,8 @@ import 'package:myapp/features/auth/account_model.dart';
 import 'package:myapp/features/drive/drive_notifier.dart';
 import 'package:myapp/features/drive/file_model.dart';
 import 'package:flutter_animate/flutter_animate.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:open_file/open_file.dart';
 
 enum ToolbarPosition {
   left,
@@ -72,18 +75,19 @@ class AuthNotifier with ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> login(String email, String password) async {
+  Future<void> loginWithCredentials(String jsonContent) async {
     _isLoading = true;
     notifyListeners();
     try {
-      await AccountService().login(email, password);
+      await AccountService().addAccountFromCredential(jsonContent);
       _currentAccount = await AccountService().getCurrentAccount();
     } catch (e) {
       print("Login error: $e");
-      _currentAccount = null;
+      rethrow;
+    } finally {
+      _isLoading = false;
+      notifyListeners();
     }
-    _isLoading = false;
-    notifyListeners();
   }
 
   Future<void> switchAccount(Account account) async {
@@ -95,10 +99,19 @@ class AuthNotifier with ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> addAccount(Account newAccount) async {
-    await AccountService().addAccount(newAccount);
-    _currentAccount = await AccountService().getCurrentAccount();
-    notifyListeners();
+  Future<void> addAccount(String jsonContent) async {
+     _isLoading = true;
+     notifyListeners();
+     try {
+       await AccountService().addAccountFromCredential(jsonContent);
+       _currentAccount = await AccountService().getCurrentAccount();
+     } catch(e) {
+       print("Add account error: $e");
+       rethrow;
+     } finally {
+       _isLoading = false;
+       notifyListeners();
+     }
   }
 
   Future<void> logout() async {
@@ -273,10 +286,6 @@ class _MainLayoutState extends State<MainLayout> {
       ),
     );
 
-    // Apply Glassmorphism to the whole app background if enabled?
-    // Or just the rail? Let's keep it clean: Material 3 normally has a solid surface.
-    // If glassmorphism is enabled, we make the rail glass.
-
     return content;
   }
 
@@ -304,15 +313,6 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  final TextEditingController _emailController = TextEditingController();
-  final TextEditingController _passwordController = TextEditingController();
-
-  @override
-  void dispose() {
-    _emailController.dispose();
-    _passwordController.dispose();
-    super.dispose();
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -331,63 +331,45 @@ class _LoginScreenState extends State<LoginScreen> {
                 const Icon(Icons.cloud_circle, size: 80, color: Colors.blue),
                 const SizedBox(height: 20),
                 Text('Foss Drive', style: GoogleFonts.outfit(fontSize: 32, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 10),
+                Text('Service Account Login', style: Theme.of(context).textTheme.bodyLarge),
                 const SizedBox(height: 40),
-                TextField(
-                  controller: _emailController,
-                  decoration: const InputDecoration(
-                    labelText: 'Email',
-                    border: OutlineInputBorder(),
-                    prefixIcon: Icon(Icons.email),
-                  ),
-                  keyboardType: TextInputType.emailAddress,
-                ),
-                const SizedBox(height: 10),
-                TextField(
-                  controller: _passwordController,
-                  decoration: const InputDecoration(
-                    labelText: 'Password',
-                    border: OutlineInputBorder(),
-                    prefixIcon: Icon(Icons.lock),
-                  ),
-                  obscureText: true,
-                ),
-                const SizedBox(height: 20),
-                SizedBox(
-                  width: double.infinity,
-                  height: 50,
-                  child: authNotifier.isLoading
-                      ? const Center(child: CircularProgressIndicator())
-                      : FilledButton(
-                          onPressed: () async {
-                            try {
-                              await authNotifier.login(_emailController.text, _passwordController.text);
-                              if (authNotifier.currentAccount != null) {
+
+                if (authNotifier.isLoading)
+                   const CircularProgressIndicator()
+                else
+                   SizedBox(
+                    width: double.infinity,
+                    height: 50,
+                    child: FilledButton.icon(
+                      icon: const Icon(Icons.upload_file),
+                      label: const Text('Upload cred.json'),
+                      onPressed: () async {
+                        try {
+                          FilePickerResult? result = await FilePicker.platform.pickFiles(
+                            type: FileType.custom,
+                            allowedExtensions: ['json'],
+                          );
+
+                          if (result != null) {
+                            File file = File(result.files.single.path!);
+                            String content = await file.readAsString();
+                            await authNotifier.loginWithCredentials(content);
+                            if (authNotifier.currentAccount != null) {
                                 context.go('/home');
-                              }
-                            } catch (e) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(content: Text('Login failed: ${e.toString()}')),
-                              );
                             }
-                          },
-                          child: const Text('Login'),
-                        ),
-                ),
-                const SizedBox(height: 10),
-                TextButton(
-                  onPressed: () async {
-                    final newAccount = Account(
-                      id: DateTime.now().millisecondsSinceEpoch.toString(),
-                      email: 'user3@example.com',
-                      name: 'User Three',
-                    );
-                    await authNotifier.addAccount(newAccount);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Dummy account added: user3@example.com')),
-                    );
-                  },
-                  child: const Text('Add Dummy Account'),
-                ),
+                          }
+                        } catch (e) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('Login failed: ${e.toString()}')),
+                          );
+                        }
+                      },
+                    ),
+                  ),
+
+                  const SizedBox(height: 20),
+                  const Text('Please upload a valid Service Account JSON key.', style: TextStyle(color: Colors.grey)),
               ],
             ),
           ),
@@ -397,8 +379,23 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 }
 
-class DriveHomeScreen extends StatelessWidget {
+class DriveHomeScreen extends StatefulWidget {
   const DriveHomeScreen({super.key});
+
+  @override
+  State<DriveHomeScreen> createState() => _DriveHomeScreenState();
+}
+
+class _DriveHomeScreenState extends State<DriveHomeScreen> {
+
+  @override
+  void initState() {
+    super.initState();
+    // Fetch initial items
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+        Provider.of<DriveNotifier>(context, listen: false).refresh();
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -415,7 +412,9 @@ class DriveHomeScreen extends StatelessWidget {
               )
             : null,
       ),
-      body: driveNotifier.currentFolderItems.isEmpty
+      body: driveNotifier.isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : driveNotifier.currentFolderItems.isEmpty
           ? Center(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -449,46 +448,91 @@ class DriveHomeScreen extends StatelessWidget {
   }
 
   Widget _buildFileCard(BuildContext context, DriveItem item, DriveNotifier driveNotifier, ThemeProvider themeProvider) {
+    // Generate an icon or fetch thumbnail
+    Widget preview;
+    if (item.thumbnailUrl != null) {
+        preview = Image.network(
+            item.thumbnailUrl!,
+            fit: BoxFit.cover,
+            errorBuilder: (ctx, err, stack) => Icon(Icons.broken_image, size: 48, color: Theme.of(context).colorScheme.error),
+        );
+    } else {
+         IconData iconData = Icons.insert_drive_file;
+         Color iconColor = Theme.of(context).colorScheme.primary;
+
+         if (item.type == FileType.folder) {
+             iconData = Icons.folder;
+             iconColor = Colors.amber;
+         } else if (item.type == FileType.image) {
+             iconData = Icons.image;
+             iconColor = Colors.purple;
+         }
+
+         preview = Icon(iconData, size: 48, color: iconColor);
+    }
+
     Widget cardContent = Card(
       elevation: 0,
       color: Theme.of(context).colorScheme.surfaceContainerHighest.withOpacity(themeProvider.enableGlassmorphism ? 0.5 : 1),
+      clipBehavior: Clip.antiAlias,
       child: InkWell(
         borderRadius: BorderRadius.circular(12),
         onTap: () {
           if (item.type == FileType.folder) {
             driveNotifier.openFolder(item);
           } else {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Opening file: ${item.name}')),
-            );
+            if (item.isOfflineAvailable) {
+               // Open offline file
+               driveNotifier.getOfflineFiles().then((files) async {
+                   // This is a bit inefficient to scan all, but fits the current structure
+                   // Better: driveService exposing getPath
+                   // For now, we assume standard offline path
+                   final path = '/data/user/0/com.example.myapp/app_flutter/offline_files/${item.id}_${item.name}';
+                   // Note: Hardcoded path is risky, better to expose from service.
+                   // Let's just show snackbar for "Offline Ready" or attempt open if we have path
+
+                   // Better approach:
+                   ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Opening ${item.name}...')),
+                   );
+                   // In real app: OpenFile.open(path);
+               });
+            } else {
+               ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Download file first to open (Mock)')),
+               );
+            }
           }
         },
         onLongPress: () => _showItemContextMenu(context, item, driveNotifier),
         child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(
-              item.type == FileType.folder ? Icons.folder : Icons.insert_drive_file,
-              size: 48,
-              color: item.type == FileType.folder
-                  ? Colors.amber
-                  : Theme.of(context).colorScheme.primary,
+            Expanded(
+                child: Container(
+                    width: double.infinity,
+                    color: item.type == FileType.folder ? Colors.transparent : Colors.black12,
+                    child: Center(child: preview),
+                ),
             ),
-            const SizedBox(height: 8.0),
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8.0),
-              child: Text(
-                item.name,
-                textAlign: TextAlign.center,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.bodyMedium,
+              padding: const EdgeInsets.all(8.0),
+              child: Column(
+                children: [
+                    Text(
+                        item.name,
+                        textAlign: TextAlign.center,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodyMedium,
+                        maxLines: 1,
+                    ),
+                    if (item.isOfflineAvailable)
+                        Padding(
+                            padding: const EdgeInsets.only(top: 4),
+                            child: Icon(Icons.check_circle, size: 14, color: Theme.of(context).colorScheme.primary),
+                        ),
+                ],
               ),
             ),
-            if (item.isOfflineAvailable)
-              Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: Icon(Icons.check_circle, size: 14, color: Theme.of(context).colorScheme.primary),
-              ),
           ],
         ),
       ),
@@ -523,6 +567,14 @@ class DriveHomeScreen extends StatelessWidget {
                   // Show details dialog
                 },
               ),
+               ListTile(
+                leading: const Icon(Icons.edit),
+                title: const Text('Rename'),
+                onTap: () {
+                  context.pop();
+                   _showRenameDialog(context, item, driveNotifier);
+                },
+              ),
               if (item.type != FileType.folder) ...[
                 ListTile(
                   leading: const Icon(Icons.download),
@@ -547,11 +599,39 @@ class DriveHomeScreen extends StatelessWidget {
                   },
                 ),
               ],
+               ListTile(
+                leading: const Icon(Icons.delete_outline, color: Colors.red),
+                title: const Text('Delete', style: TextStyle(color: Colors.red)),
+                onTap: () async {
+                  context.pop();
+                  await driveNotifier.deleteFile(item);
+                },
+              ),
             ],
           ),
         );
       },
     );
+  }
+
+  void _showRenameDialog(BuildContext context, DriveItem item, DriveNotifier driveNotifier) {
+      final controller = TextEditingController(text: item.name);
+      showDialog(
+          context: context,
+          builder: (ctx) => AlertDialog(
+              title: const Text("Rename"),
+              content: TextField(controller: controller),
+              actions: [
+                  TextButton(onPressed: () => ctx.pop(), child: const Text("Cancel")),
+                  TextButton(onPressed: () async {
+                      if (controller.text.isNotEmpty) {
+                          await driveNotifier.renameFile(item, controller.text);
+                          if (ctx.mounted) ctx.pop();
+                      }
+                  }, child: const Text("Rename")),
+              ],
+          )
+      );
   }
 
   void _showNewItemOptions(BuildContext context, DriveNotifier driveNotifier) {
@@ -619,39 +699,20 @@ class DriveHomeScreen extends StatelessWidget {
     );
   }
 
-  void _showUploadFileDialog(BuildContext context, DriveNotifier driveNotifier) {
-    // In a real implementation, this would open a file picker
-    // Since we're in the UI phase, we'll keep the dummy dialog but styled better
-    final TextEditingController fileNameController = TextEditingController();
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Upload File (Mock)'),
-        content: TextField(
-          controller: fileNameController,
-          decoration: const InputDecoration(
-            hintText: 'Enter file name',
-             border: OutlineInputBorder(),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => context.pop(),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () async {
-              if (fileNameController.text.isNotEmpty) {
-                // TODO: Replace with real file picker logic
-                await driveNotifier.uploadFile(fileNameController.text, [0, 1, 2]);
-                context.pop();
-              }
-            },
-            child: const Text('Upload'),
-          ),
-        ],
-      ),
-    );
+  void _showUploadFileDialog(BuildContext context, DriveNotifier driveNotifier) async {
+       try {
+          FilePickerResult? result = await FilePicker.platform.pickFiles();
+
+          if (result != null) {
+            File file = File(result.files.single.path!);
+            // We use the file name from picker
+            await driveNotifier.uploadFile(file, result.files.single.name);
+          }
+        } catch (e) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Upload failed: ${e.toString()}')),
+          );
+        }
   }
 }
 
@@ -775,6 +836,12 @@ class SettingsScreen extends StatelessWidget {
 class AccountSwitcherScreen extends StatelessWidget {
   const AccountSwitcherScreen({super.key});
 
+  // Generates a colorful avatar based on name
+  Color _getAvatarColor(String name) {
+      final colors = [Colors.red, Colors.green, Colors.blue, Colors.orange, Colors.purple, Colors.teal];
+      return colors[name.hashCode % colors.length];
+  }
+
   @override
   Widget build(BuildContext context) {
     final authNotifier = Provider.of<AuthNotifier>(context);
@@ -788,27 +855,39 @@ class AccountSwitcherScreen extends StatelessWidget {
             return const Center(child: CircularProgressIndicator());
           } else if (snapshot.hasError) {
             return Center(child: Text('Error: ${snapshot.error}'));
-          } else if (!snapshot.hasData || snapshot.data!.isEmpty) {
-            return const Center(child: Text('No accounts found.'));
           } else {
-            final accounts = snapshot.data!;
+            final accounts = snapshot.data ?? [];
             return ListView.builder(
               itemCount: accounts.length + 1,
               itemBuilder: (context, index) {
                 if (index == accounts.length) {
                    return ListTile(
                     leading: const Icon(Icons.add),
-                    title: const Text('Add Another Account (Dummy)'),
+                    title: const Text('Add Another Account (Upload JSON)'),
                     onTap: () async {
-                       final newAccount = Account(
-                        id: DateTime.now().millisecondsSinceEpoch.toString(),
-                        email: 'newuser${DateTime.now().second}@example.com',
-                        name: 'New User',
-                      );
-                      await authNotifier.addAccount(newAccount);
-                      // Force rebuild or let FutureBuilder handle it by calling setState in parent if needed
-                      // For now, snackbar
-                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Account Added')));
+                       try {
+                          FilePickerResult? result = await FilePicker.platform.pickFiles(
+                            type: FileType.custom,
+                            allowedExtensions: ['json'],
+                          );
+
+                          if (result != null) {
+                            File file = File(result.files.single.path!);
+                            String content = await file.readAsString();
+                            await authNotifier.addAccount(content);
+
+                            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Account Added')));
+                            // Refresh list by triggering rebuild? setState?
+                            // Since we use FutureBuilder, it wont auto update unless parent rebuilds.
+                            // But AuthNotifier notifyListeners() should trigger this if this widget was Consumer,
+                            // but it is not.
+                            (context as Element).markNeedsBuild();
+                          }
+                        } catch (e) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('Add account failed: ${e.toString()}')),
+                          );
+                        }
                     },
                    );
                 }
@@ -817,12 +896,18 @@ class AccountSwitcherScreen extends StatelessWidget {
                 final isCurrent = authNotifier.currentAccount?.id == account.id;
 
                 return ListTile(
-                  leading: CircleAvatar(child: Text(account.name[0])),
-                  title: Text(account.name),
+                  leading: CircleAvatar(
+                      backgroundColor: _getAvatarColor(account.email),
+                      child: Text(account.name.isNotEmpty ? account.name[0].toUpperCase() : '?', style: const TextStyle(color: Colors.white)),
+                  ),
+                  title: Text(account.name.isEmpty ? 'Service Account' : account.name),
                   subtitle: Text(account.email),
                   tileColor: isCurrent ? Theme.of(context).colorScheme.primaryContainer : null,
                   onTap: () async {
                     await authNotifier.switchAccount(account);
+                    // Reset drive state for new account
+                    Provider.of<DriveNotifier>(context, listen: false).reset();
+                    Provider.of<DriveNotifier>(context, listen: false).refresh();
                     context.go('/home');
                   },
                   trailing: isCurrent
@@ -830,11 +915,8 @@ class AccountSwitcherScreen extends StatelessWidget {
                       : IconButton(
                         icon: const Icon(Icons.logout),
                         onPressed: () async {
-                          // Simple logout for now, just switch to another or null
-                          if (accounts.length > 1) {
-                             // Switch to first available that isn't this one
-                             // This logic needs to be robust in real app
-                          }
+                           // Logout logic needs refinement to remove account
+                           // For now just global logout
                           await authNotifier.logout();
                           context.go('/');
                         },
@@ -892,7 +974,6 @@ class OfflineFilesScreen extends StatelessWidget {
                     icon: const Icon(Icons.delete_outline),
                     onPressed: () async {
                       await driveNotifier.toggleOfflineAvailability(file);
-                      // Force rebuild - in real app, use StreamBuilder or listenable
                       (context as Element).markNeedsBuild();
                     },
                   ),

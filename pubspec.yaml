@@ -5,13 +5,13 @@ publish_to: 'none'
 version: 1.0.0+1
 
 environment:
-  sdk: ^3.9.0
+  sdk: ^3.0.0
 
 dependencies:
   flutter:
     sdk: flutter
   cupertino_icons: ^1.0.8
-  go_router: ^14.0.0 # Keeping this as it's stable, though 17.0.1 was in original. 14+ is usually fine for this API.
+  go_router: ^14.0.0
   flutter_secure_storage: ^9.0.0
   path_provider: ^2.1.2
   provider: ^6.1.1
@@ -23,6 +23,11 @@ dependencies:
   google_fonts: ^6.1.0
   open_file: ^3.3.2
   flutter_animate: ^4.5.0
+
+  # Drive API dependencies
+  googleapis: ^13.1.0
+  googleapis_auth: ^1.6.0
+  http: ^1.2.0
 
 dev_dependencies:
   flutter_test:
